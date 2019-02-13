@@ -1,3 +1,4 @@
+AWSTemplateFormatVersion: 2010-09-09
 Parameters:
   baseHostedZone:
     Type: "AWS::Route53::HostedZone::Id"
@@ -52,7 +53,7 @@ Resources:
               OriginAccessIdentity: ""
         PriceClass: "PriceClass_All"
   Route53Record:
-    Type: 'AWS::Route53::RecordSet'
+    Type: "AWS::Route53::RecordSet"
     DependsOn: CloudFront
     Properties:
       HostedZoneId: !Ref baseHostedZone
@@ -64,5 +65,5 @@ Resources:
       TTL: 300
       ResourceRecords:
         - Fn::Sub:
-          - "${DomainName}."
-          - DomainName: !GetAtt CloudFront.DomainName
+            - "${DomainName}."
+            - DomainName: !GetAtt CloudFront.DomainName
