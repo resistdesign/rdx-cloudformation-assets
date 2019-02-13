@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Pipeline using CodePipeline and CodeBuild for continuous delivery of a
+  single-page application to S3
+Parameters:
+  HostedZoneId:
+    Type: String
+    Description: The id of the hosted zone where the record should be added
+  SiteBucketName:
+    Type: String
+    Description: Name of bucket to create to host the website
+  GitHubUser:
+    Type: String
+    Description: GitHub User
+    Default: resistdesign
+  GitHubRepo:
+    Type: String
+    Description: GitHub Repo to pull from. Only the Name. not the URL
+    Default: booklets
+  GitHubBranch:
+    Type: String
+    Description: GitHub Branch
+    Default: master
+  GitHubToken:
+    NoEcho: true
+    Type: String
+    Description: >-
+      Secret. It might look something like
+      9b189a1654643522561f7b3ebd44a1531a4287af OAuthToken with access to Repo.
+      Go to https://github.com/settings/tokens
+  BuildType:
+    Type: String
+    Default: LINUX_CONTAINER
+    Description: The build container type to use for building the app
+  BuildComputeType:
+    Type: String
+    Default: BUILD_GENERAL1_SMALL
+    Description: The build compute type to use for building the app
+  BuildImage:
+    Type: String
+    Default: 'aws/codebuild/nodejs:8.11.0'
+    Description: The build image to use for building the app
+Mappings:
+  RegionMap:
+    us-east-1:
+      S3hostedzoneID: Z3AQBSTGFYJSTF
+      websiteendpoint: s3-website-us-east-1.amazonaws.com
+    us-west-1:
+      S3hostedzoneID: Z2F56UZL2M1ACD
+      websiteendpoint: s3-website-us-west-1.amazonaws.com
+    us-west-2:
+      S3hostedzoneID: Z3BJ6K6RIION7M
+      websiteendpoint: s3-website-us-west-2.amazonaws.com
+    eu-west-1:
+      S3hostedzoneID: Z1BKCTXD74EZPE
+      websiteendpoint: s3-website-eu-west-1.amazonaws.com
+    ap-southeast-1:
+      S3hostedzoneID: Z3O0J2DXBE1FTB
+      websiteendpoint: s3-website-ap-southeast-1.amazonaws.com
+    ap-southeast-2:
+      S3hostedzoneID: Z1WCIGYICN2BYD
+      websiteendpoint: s3-website-ap-southeast-2.amazonaws.com
+    ap-northeast-1:
+      S3hostedzoneID: Z2M4EHUR26P7ZW
+      websiteendpoint: s3-website-ap-northeast-1.amazonaws.com
+    sa-east-1:
+      S3hostedzoneID: Z31GFT0UA1I2HV
+      websiteendpoint: s3-website-sa-east-1.amazonaws.com
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Site Configuration
+        Parameters:
+          - SiteBucketName
+      - Label:
+          default: GitHub Configuration
+        Parameters:
+          - GitHubToken
+          - GitHubUser
+          - GitHubRepo
+          - GitHubBranch
+      - Label:
+          default: Build Configuration
+        Parameters:
+          - BuildType
+          - BuildComputeType
+          - BuildImage
+    ParameterLabels:
+      SiteBucketName:
+        default: Name of S3 Bucket to create for website hosting
+      GitHubToken:
+        default: GitHub OAuth2 Token
+      GitHubUser:
+        default: GitHub User/Org Name
+      GitHubRepo:
+        default: GitHub Repository Name
+      GitHubBranch:
+        default: GitHub Branch Name
+      BuildType:
+        default: CodeBuild type
+      BuildComputeType:
+        default: CodeBuild instance type
+      BuildImage:
+        default: CodeBuild image
+  'AWS::CloudFormation::Designer':
+    dc241eed-ea45-4037-9a56-5469027d347c:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 60
+        'y': 90
+      z: 1
+      embeds: []
+    1297b0cb-8695-4fc6-999a-9445aae8a91d:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 180
+        'y': 90
+      z: 1
+      embeds: []
+    23a3cfce-4943-4072-89e3-6f72e2125df2:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 60
+        'y': 210
+      z: 1
+      embeds: []
+    c974ae36-3bbc-41a2-b16b-4c6cc56c7f0e:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 180
+        'y': 210
+      z: 1
+      embeds: []
+    49f355d7-12d5-413e-8ec7-e03d107ad697:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 300
+        'y': 90
+      z: 1
+      embeds: []
+    193648b6-3c8a-423e-a675-768d0f883315:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 300
+        'y': 210
+      z: 1
+      embeds: []
+    558ca8d8-9b99-4ee0-845f-43f49cd6b636:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: -40
+        'y': 140
+      z: 0
+      embeds: []
+      dependson:
+        - 1297b0cb-8695-4fc6-999a-9445aae8a91d
+Resources:
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codebuild-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+            Version: 2012-10-17
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c974ae36-3bbc-41a2-b16b-4c6cc56c7f0e
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'codebuild:*'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:PutObject'
+                Resource:
+                  - 'arn:aws:s3:::codepipeline*'
+                Effect: Allow
+              - Action:
+                  - 's3:*'
+                  - 'cloudformation:*'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 23a3cfce-4943-4072-89e3-6f72e2125df2
+  SiteBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Ref SiteBucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 1297b0cb-8695-4fc6-999a-9445aae8a91d
+  PipelineBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: dc241eed-ea45-4037-9a56-5469027d347c
+  CodeBuildDeploySite:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn: CodeBuildRole
+    Properties:
+      Name: !Sub '${AWS::StackName}-DeploySite'
+      Description: Deploy site to S3
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref BuildType
+        ComputeType: !Ref BuildComputeType
+        Image: !Sub '${BuildImage}'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.1
+          phases:
+            build: 
+              commands: 
+                - "npm i && npm i rdx && NODE_ENV=production npx rdx compile"
+            post_build:
+              commands:
+                - aws s3 cp --recursive --acl public-read ./public s3://${SiteBucketName}/
+          artifacts:
+            type: zip
+            base-directory: 'public'
+            files: 
+                - '**/*'
+      TimeoutInMinutes: 10
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 49f355d7-12d5-413e-8ec7-e03d107ad697
+  Pipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: Artifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: DeployOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildDeploySite
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineBucket
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 193648b6-3c8a-423e-a675-768d0f883315
+  R53RS4B2CO:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Type: A
+      Name: !Sub '${SiteBucketName}.'
+      AliasTarget:
+        HostedZoneId: !FindInMap 
+          - RegionMap
+          - !Ref 'AWS::Region'
+          - S3hostedzoneID
+        DNSName: !FindInMap 
+          - RegionMap
+          - !Ref 'AWS::Region'
+          - websiteendpoint
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 558ca8d8-9b99-4ee0-845f-43f49cd6b636
+    DependsOn:
+      - SiteBucket
+Outputs:
+  PipelineUrl:
+    Value: !Sub >-
+      https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}
+    Description: CodePipeline URL
+  SiteUrl:
+    Value: !GetAtt 
+      - SiteBucket
+      - WebsiteURL
+    Description: S3 Website URL

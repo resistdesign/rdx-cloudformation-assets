@@ -1,0 +1,68 @@
+Parameters:
+  baseHostedZone:
+    Type: "AWS::Route53::HostedZone::Id"
+  certificateARN:
+    Type: "String"
+    AllowedPattern: "^.*?us-east-1.*"
+    ConstraintDescription: "The certificate must be in the us-east-1 region."
+  fullDomainName:
+    Type: "String"
+Resources:
+  S3:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Ref fullDomainName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+  CloudFront:
+    Type: "AWS::CloudFront::Distribution"
+    DependsOn: S3
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref fullDomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref certificateARN
+          SslSupportMethod: "sni-only"
+          MinimumProtocolVersion: "TLSv1.1_2016"
+        DefaultCacheBehavior:
+          ForwardedValues:
+            QueryString: false
+          TargetOriginId:
+            Fn::Sub:
+              - "S3-${S3BucketName}"
+              - S3BucketName: !Ref fullDomainName
+          ViewerProtocolPolicy: "redirect-to-https"
+        DefaultRootObject: "index.html"
+        Enabled: true
+        IPV6Enabled: false
+        HttpVersion: "http2"
+        Origins:
+          - DomainName:
+              Fn::Sub:
+                - "${S3BucketName}.s3.amazonaws.com"
+                - S3BucketName: !Ref fullDomainName
+            Id:
+              Fn::Sub:
+                - "S3-${S3BucketName}"
+                - S3BucketName: !Ref fullDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        PriceClass: "PriceClass_All"
+  Route53Record:
+    Type: 'AWS::Route53::RecordSet'
+    DependsOn: CloudFront
+    Properties:
+      HostedZoneId: !Ref baseHostedZone
+      Type: CNAME
+      Name:
+        Fn::Sub:
+          - "${DomainName}."
+          - DomainName: !Ref fullDomainName
+      TTL: 300
+      ResourceRecords:
+        - Fn::Sub:
+          - "${DomainName}."
+          - DomainName: !GetAtt CloudFront.DomainName
