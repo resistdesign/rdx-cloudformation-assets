@@ -1,20 +1,104 @@
 AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Automatically build and deploy a single page application from a GitHub repository. Assets
+  are hosted in S3 with a CloudFront CDN that provides SSL, a fallback (index.html) and
+  automatic redirection from HTTP to HTTPS. A CNAME alias that points at the CloudFront
+  Distribution will be created in Route53.
 Parameters:
-  baseHostedZone:
-    Type: "AWS::Route53::HostedZone::Id"
-  certificateARN:
+  EnvironmentType:
     Type: "String"
+    Description: "The name of the environment to build under (NODE_ENV)"
+    default: "production"
+  HostedZoneId:
+    Type: "AWS::Route53::HostedZone::Id"
+    Description: "Select the Hosted Zone"
+  FullDomainName:
+    Type: "String"
+    Description: "A sub-domain to be created within the Hosted Zone (Example: app.example.com)"
+  SSLCertificateARN:
+    Type: "String"
+    Description: "The ARN of the SSL Certificate (us-east-1 only)"
     AllowedPattern: "^.*?us-east-1.*"
     ConstraintDescription: "The certificate must be in the us-east-1 region."
-  fullDomainName:
+  GitHubUser:
     Type: "String"
+    Description: "The GitHub User that owns the repository"
+  GitHubRepo:
+    Type: "String"
+    Description: "The name of the GitHub repository"
+  GitHubBranch:
+    Type: "String"
+    Description: "The name of the branch to be built"
+    Default: "master"
+  GitHubToken:
+    NoEcho: true
+    Type: "String"
+    Description: "A GitHub Access Token with `repo` permissions (https://github.com/settings/tokens)"
+  BuildType:
+    Type: "String"
+    Default: "LINUX_CONTAINER"
+    Description: "The type of container that will be used for running the build"
+  BuildComputeType:
+    Type: "String"
+    Default: "BUILD_GENERAL1_SMALL"
+    Description: "The type/size of build compute configuration"
+  BuildImage:
+    Type: "String"
+    Default: 'aws/codebuild/nodejs:10.14.1'
+    Description: "The image needed to build the app"
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Hosting Configuration
+        Parameters:
+          - EnvironmentType
+          - HostedZoneId
+          - FullDomainName
+          - SSLCertificateARN
+      - Label:
+          default: GitHub Settings
+        Parameters:
+          - GitHubToken
+          - GitHubUser
+          - GitHubRepo
+          - GitHubBranch
+      - Label:
+          default: Build Settings
+        Parameters:
+          - BuildType
+          - BuildComputeType
+          - BuildImage
+    ParameterLabels:
+      EnvironmentType:
+        default: Environment Type
+      HostedZoneId:
+        default: Hosted Zone
+      FullDomainName:
+        default: Full Domain Name
+      SSLCertificateARN:
+        default: SSL Certificate ARN
+      GitHubToken:
+        default: GitHub Access Token
+      GitHubUser:
+        default: GitHub User (or Organization)
+      GitHubRepo:
+        default: GitHub Repository Name
+      GitHubBranch:
+        default: Build Branch
+      BuildType:
+        default: CodeBuild Build Type
+      BuildComputeType:
+        default: CodeBuild Compute Instance Type
+      BuildImage:
+        default: CodeBuild Build Image
 Resources:
   S3:
     Type: "AWS::S3::Bucket"
     DeletionPolicy: Delete
     Properties:
       AccessControl: PublicRead
-      BucketName: !Ref fullDomainName
+      BucketName: !Ref FullDomainName
       WebsiteConfiguration:
         IndexDocument: index.html
   CloudFront:
@@ -23,9 +107,9 @@ Resources:
     Properties:
       DistributionConfig:
         Aliases:
-          - !Ref fullDomainName
+          - !Ref FullDomainName
         ViewerCertificate:
-          AcmCertificateArn: !Ref certificateARN
+          AcmCertificateArn: !Ref SSLCertificateARN
           SslSupportMethod: "sni-only"
           MinimumProtocolVersion: "TLSv1.1_2016"
         DefaultCacheBehavior:
@@ -34,7 +118,7 @@ Resources:
           TargetOriginId:
             Fn::Sub:
               - "S3-${S3BucketName}"
-              - S3BucketName: !Ref fullDomainName
+              - S3BucketName: !Ref FullDomainName
           ViewerProtocolPolicy: "redirect-to-https"
         DefaultRootObject: "index.html"
         Enabled: true
@@ -44,11 +128,11 @@ Resources:
           - DomainName:
               Fn::Sub:
                 - "${S3BucketName}.s3.amazonaws.com"
-                - S3BucketName: !Ref fullDomainName
+                - S3BucketName: !Ref FullDomainName
             Id:
               Fn::Sub:
                 - "S3-${S3BucketName}"
-                - S3BucketName: !Ref fullDomainName
+                - S3BucketName: !Ref FullDomainName
             S3OriginConfig:
               OriginAccessIdentity: ""
         PriceClass: "PriceClass_All"
@@ -56,14 +140,152 @@ Resources:
     Type: "AWS::Route53::RecordSet"
     DependsOn: CloudFront
     Properties:
-      HostedZoneId: !Ref baseHostedZone
+      HostedZoneId: !Ref HostedZoneId
       Type: CNAME
       Name:
         Fn::Sub:
           - "${DomainName}."
-          - DomainName: !Ref fullDomainName
+          - DomainName: !Ref FullDomainName
       TTL: 300
       ResourceRecords:
         - Fn::Sub:
             - "${DomainName}."
             - DomainName: !GetAtt CloudFront.DomainName
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codebuild-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+            Version: 2012-10-17
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'codebuild:*'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:PutObject'
+                Resource:
+                  - 'arn:aws:s3:::codepipeline*'
+                Effect: Allow
+              - Action:
+                  - 's3:*'
+                  - 'cloudformation:*'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+  PipelineBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+  CodeBuildDeploySite:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn:
+      - CodeBuildRole
+      - S3
+    Properties:
+      Name: !Sub '${AWS::StackName}-BuildAndDeploySite'
+      Description: Deploy site to S3
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref BuildType
+        ComputeType: !Ref BuildComputeType
+        Image: !Sub '${BuildImage}'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.1
+          phases:
+            build:
+              commands:
+                - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
+            post_build:
+              commands:
+                - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
+          artifacts:
+            type: zip
+            base-directory: 'public'
+            files:
+                - '**/*'
+      TimeoutInMinutes: 10
+  Pipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn: CodeBuildDeploySite
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: "Acquire Source"
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              RunOrder: 1
+        - Name: "Build And Deploy"
+          Actions:
+            - Name: Artifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: DeployOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildDeploySite
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineBucket
+Outputs:
+  AppURL:
+    Description: App URL
+    Value: !Sub https://${FullDomainName}
