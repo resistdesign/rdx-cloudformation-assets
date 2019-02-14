@@ -250,7 +250,7 @@ Resources:
     Properties:
       RoleArn: !GetAtt CodePipelineRole.Arn
       Stages:
-        - Name: "Acquire Source"
+        - Name: "Acquire-Source"
           Actions:
             - InputArtifacts: []
               Name: Source
@@ -267,7 +267,7 @@ Resources:
                 Branch: !Ref GitHubBranch
                 OAuthToken: !Ref GitHubToken
               RunOrder: 1
-        - Name: "Build And Deploy"
+        - Name: "Build-And-Deploy"
           Actions:
             - Name: Artifact
               ActionTypeId:
