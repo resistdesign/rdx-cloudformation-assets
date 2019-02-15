@@ -135,6 +135,15 @@ Resources:
                 - S3BucketName: !Ref FullDomainName
             S3OriginConfig:
               OriginAccessIdentity: ""
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: "/index.html"
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: "/index.html"
         PriceClass: "PriceClass_All"
   Route53Record:
     Type: "AWS::Route53::RecordSet"
