@@ -5,9 +5,11 @@ Description: >-
   automatic redirection from HTTP to HTTPS. A DNS alias that points at the CloudFront
   Distribution will be created in Route53.
   Example App URL: `example.com -> https://example.com`
+  Sub-domain Example App URL: `app.example.com -> https://app.example.com`
 
   An Edge Optimized API Cloud Function will also be deployed with an API Gateway, DNS and SSL.
-  Example API URL: `example.com -> https://api.example.com`
+  Example API URL: `api.example.com -> https://api.example.com`
+  Sub-domain Example API URL: `app-api.example.com -> https://app-api.example.com`
 Parameters:
   # Common/Hosting
   EnvironmentType:
@@ -19,10 +21,19 @@ Parameters:
     Description: "Select the Hosted Zone"
   FullDomainName:
     Type: "String"
+    Description: |
+      The domain name of the selected Hosted Zone (Example: example.com) or
+      a sub-domain to be created within the Hosted Zone (Example: app.example.com)
+  FullAPIDomainName:
+    Type: "String"
     Description: "A sub-domain to be created within the Hosted Zone (Example: app.example.com)"
   SSLCertificateARN:
     Type: "String"
-    Description: "The ARN of the SSL Certificate (us-east-1 only)"
+    Description: |
+      The ARN of the SSL Certificate (us-east-1 only).
+      The certificate should be for the Hosted Zone domain and a wildcard, for instance:
+        example.com
+        *.example.com
     AllowedPattern: "^.*?us-east-1.*"
     ConstraintDescription: "The certificate must be in the us-east-1 region."
   # UI Repo
@@ -53,6 +64,10 @@ Parameters:
     Type: "String"
     Default: 'aws/codebuild/nodejs:10.14.1'
     Description: "The image needed to build the app"
+  ConfigCommand:
+    Type: "String"
+    Default: 'echo "{}" > config.json'
+    Description: "A command to execute before the UI build command"
   # API Repo
   APIGitHubUser:
     Type: "String"
@@ -81,6 +96,10 @@ Parameters:
     Type: "String"
     Default: 'aws/codebuild/nodejs:10.14.1'
     Description: "The image needed to build the app"
+  APIConfigCommand:
+    Type: "String"
+    Default: 'echo "{}" > config.json'
+    Description: "A command to execute before the API build command"
 Metadata:
   'AWS::CloudFormation::Interface':
     ParameterGroups:
@@ -90,6 +109,7 @@ Metadata:
           - EnvironmentType
           - HostedZoneId
           - FullDomainName
+          - FullAPIDomainName
           - SSLCertificateARN
       - Label:
           default: UI GitHub Settings
@@ -104,6 +124,7 @@ Metadata:
           - BuildType
           - BuildComputeType
           - BuildImage
+          - ConfigCommand
       - Label:
           default: API GitHub Settings
         Parameters:
@@ -117,6 +138,7 @@ Metadata:
           - APIBuildType
           - APIBuildComputeType
           - APIBuildImage
+          - APIConfigCommand
     ParameterLabels:
       EnvironmentType:
         default: Environment Type
@@ -124,6 +146,8 @@ Metadata:
         default: Hosted Zone
       FullDomainName:
         default: Full Domain Name
+      FullAPIDomainName:
+        default: Full API Domain Name
       SSLCertificateARN:
         default: SSL Certificate ARN
       GitHubToken:
@@ -140,6 +164,8 @@ Metadata:
         default: UI CodeBuild Compute Instance Type
       BuildImage:
         default: UI CodeBuild Build Image
+      ConfigCommand:
+        default: UI Config Command
       APIGitHubToken:
         default: API GitHub Access Token
       APIGitHubUser:
@@ -154,17 +180,10 @@ Metadata:
         default: API CodeBuild Compute Instance Type
       APIBuildImage:
         default: API CodeBuild Build Image
+      APIConfigCommand:
+        default: API Config Command
 Resources:
   # API Products
-  APIS3:
-    Type: "AWS::S3::Bucket"
-    DeletionPolicy: Delete
-    Properties:
-      AccessControl: Private
-      BucketName:
-        Fn::Sub:
-          - "s3.api.${DomainName}"
-          - DomainName: !Ref FullDomainName
   APICloudFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -183,8 +202,12 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       Code:
-        S3Bucket: !Ref APIS3
-        S3Key: dist.zip
+        ZipFile: |
+          module.exports = {handler: async () => ({
+                      statusCode: 200,
+                      headers: {'Content-Type': 'application/json'},
+                      body: '"nice jorb!"'
+                    })};
       Environment:
         Variables:
           NODE_ENV: !Ref EnvironmentType
@@ -193,43 +216,136 @@ Resources:
         Fn::GetAtt:
           - APICloudFunctionRole
           - Arn
-      Runtime: nodejs10.x
+      Runtime: nodejs8.10
   APIGatewayRESTAPI:
     Type: AWS::ApiGateway::RestApi
     Properties:
+      Name: !Sub '${AWS::StackName}-APIGatewayRESTAPI'
       EndpointConfiguration:
         Types:
           - EDGE
-      Body:
-        info:
-          version: '1.0'
-          title:
-            Ref: AWS::StackName
-        paths:
-          "/":
-            post:
-              x-amazon-apigateway-integration:
-                httpMethod: POST
-                type: aws_proxy
-                uri:
-                  Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${APICloudFunction.Arn}/invocations
-              responses: {}
-        swagger: '2.0'
+  APIGatewayRESTAPIResource:
+    Type: AWS::ApiGateway::Resource
+    DependsOn: APIGatewayRESTAPI
+    Properties:
+      ParentId:
+        Fn::GetAtt:
+          - APIGatewayRESTAPI
+          - RootResourceId
+      PathPart: '{proxy+}'
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+  APIGatewayRESTAPIMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn: APIGatewayRESTAPIResource
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId:
+        Ref: APIGatewayRESTAPIResource
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${APICloudFunction.Arn}/invocations
+  APIGatewayRESTAPIRootMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn: APIGatewayRESTAPIResource
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId:
+        Fn::GetAtt:
+          - APIGatewayRESTAPI
+          - RootResourceId
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${APICloudFunction.Arn}/invocations
   APIGatewayRESTAPIDeployment:
     Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - APIGatewayRESTAPIResource
+      - APIGatewayRESTAPIMethod
+      - APIGatewayRESTAPIRootMethod
+      - APIGatewayRESTAPI
+      - APICloudFunction
     Properties:
       RestApiId:
         Ref: APIGatewayRESTAPI
-      StageName: !Ref EnvironmentType
+  APICloudWatch:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-APIGatewayLogs
+  APICloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - >-
+          arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+  APICloudWatchAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !GetAtt
+        - APICloudWatchRole
+        - Arn
   APIGatewayRESTAPIEnvironment:
     Type: AWS::ApiGateway::Stage
+    DependsOn:
+      - APICloudWatchAccount
+      - APIGatewayRESTAPIDeployment
     Properties:
+      AccessLogSetting:
+        DestinationArn:
+          Fn::GetAtt:
+            - APICloudWatch
+            - Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","apiGatewayErrorMessage":"$context.error.message"}'
       DeploymentId:
         Ref: APIGatewayRESTAPIDeployment
       RestApiId:
         Ref: APIGatewayRESTAPI
       StageName: !Ref EnvironmentType
-  APICloudFunctionPOSTResourcePermission:
+  APIDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      CertificateArn: !Ref SSLCertificateARN
+      DomainName:
+        Fn::Sub:
+          - "${DomainName}"
+          - DomainName: !Ref FullAPIDomainName
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  APIDomainNameBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    DependsOn:
+      - APIGatewayRESTAPI
+      - APIGatewayRESTAPIEnvironment
+      - APIDomainName
+    Properties:
+      DomainName:
+        Fn::Sub:
+          - "${DomainName}"
+          - DomainName: !Ref FullAPIDomainName
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Stage: !Ref EnvironmentType
+  APICloudFunctionANYResourcePermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:invokeFunction
@@ -238,34 +354,10 @@ Resources:
         Ref: APICloudFunction
       SourceArn:
         Fn::Sub:
-          - arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/POST/
+          - arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/*/*
           - __Stage__: !Ref EnvironmentType
             __ApiId__:
               Ref: APIGatewayRESTAPI
-  APIDomainName:
-    Type: AWS::ApiGateway::DomainName
-    Properties:
-      CertificateArn: !Ref SSLCertificateARN
-      DomainName:
-        Fn::Sub:
-          - "api.${DomainName}."
-          - DomainName: !Ref FullDomainName
-      EndpointConfiguration:
-        Types:
-          - EDGE
-      # RegionalCertificateArn: ''
-  APIDomainNameBasePathMapping:
-    Type: AWS::ApiGateway::BasePathMapping
-    DependsOn: APIGatewayRESTAPI
-    Properties:
-      BasePath: '/'
-      DomainName:
-        Fn::Sub:
-          - "api.${DomainName}."
-          - DomainName: !Ref FullDomainName
-      RestApiId:
-        Ref: APIGatewayRESTAPI
-      Stage: !Ref EnvironmentType
   APIRoute53Record:
     Type: "AWS::Route53::RecordSet"
     DependsOn: APIDomainName
@@ -274,8 +366,8 @@ Resources:
       Type: A
       Name:
         Fn::Sub:
-          - "api.${DomainName}."
-          - DomainName: !Ref FullDomainName
+          - "${DomainName}."
+          - DomainName: !Ref FullAPIDomainName
       AliasTarget:
         HostedZoneId: Z2FDTNDATAQYW2
         DNSName:
@@ -348,10 +440,9 @@ Resources:
     Type: 'AWS::CodeBuild::Project'
     DependsOn:
       - APICodeBuildRole
-      - APIS3
     Properties:
-      Name: !Sub '${AWS::StackName}-BuildAndDeployAPI'
-      Description: Deploy API to S3
+      Name: !Sub '${AWS::StackName}-APICodeBuildDeploySite'
+      Description: Deploy API to Lambda
       ServiceRole: !GetAtt APICodeBuildRole.Arn
       Artifacts:
         Type: CODEPIPELINE
@@ -361,20 +452,26 @@ Resources:
         Image: !Sub '${APIBuildImage}'
       Source:
         Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.1
-          phases:
-            build:
-              commands:
-                - "npm i && npm i @resistdesign/jsx-compiler && NODE_ENV=${EnvironmentType} npx jsxc"
-            post_build:
-              commands:
-                - aws s3 cp --recursive --acl private ./dist s3://s3.api.${FullDomainName}/
-          artifacts:
-            type: zip
-            base-directory: 'dist'
-            files:
-                - '**/*'
+        BuildSpec:
+          Fn::Sub:
+            - |
+              version: 0.1
+              phases:
+                build:
+                  commands:
+                    - ${APIConfigCommand}
+                    - "npm i && npm i @resistdesign/jsx-compiler && NODE_ENV=${EnvironmentType} npx jsxc"
+                post_build:
+                  commands:
+                    - cd dist && zip -qr ../dist.zip * && cd ..
+                    - aws lambda update-function-code --function-name "${APIFunctionArn}" --zip-file "fileb://dist.zip"
+              artifacts:
+                type: zip
+                base-directory: 'dist'
+                files:
+                    - '**/*'
+            - EnvironmentType: !Ref EnvironmentType
+              APIFunctionArn: !GetAtt APICloudFunction.Arn
       TimeoutInMinutes: 10
   APIPipeline:
     Type: 'AWS::CodePipeline::Pipeline'
@@ -553,6 +650,7 @@ Resources:
     DependsOn:
       - CodeBuildRole
       - S3
+      - CloudFront
     Properties:
       Name: !Sub '${AWS::StackName}-BuildAndDeploySite'
       Description: Deploy site to S3
@@ -565,20 +663,25 @@ Resources:
         Image: !Sub '${BuildImage}'
       Source:
         Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.1
-          phases:
-            build:
-              commands:
-                - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
-            post_build:
-              commands:
-                - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
-          artifacts:
-            type: zip
-            base-directory: 'public'
-            files:
-                - '**/*'
+        BuildSpec:
+          Fn::Sub:
+            - |
+              version: 0.1
+              phases:
+                build:
+                  commands:
+                    - ${ConfigCommand}
+                    - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
+                post_build:
+                  commands:
+                    - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
+                    - aws cloudfront create-invalidation --distribution-id "${DistributionId}" --paths "/*"
+              artifacts:
+                type: zip
+                base-directory: 'public'
+                files:
+                    - '**/*'
+            - DistributionId: !Ref CloudFront
       TimeoutInMinutes: 10
   Pipeline:
     Type: 'AWS::CodePipeline::Pipeline'
@@ -627,4 +730,4 @@ Outputs:
     Value: !Sub https://${FullDomainName}
   APIURL:
     Description: API URL
-    Value: !Sub https://api.${FullDomainName}
+    Value: !Sub https://${FullAPIDomainName}
