@@ -6,10 +6,15 @@ Description: >-
   Distribution will be created in Route53.
   Example App URL: `example.com -> https://example.com`
   Sub-domain Example App URL: `app.example.com -> https://app.example.com`
-
+  *****
   An Edge Optimized API Cloud Function will also be deployed with an API Gateway, DNS and SSL.
   Example API URL: `api.example.com -> https://api.example.com`
   Sub-domain Example API URL: `app-api.example.com -> https://app-api.example.com`
+  *****
+  Environment Variables available to the API Function at runtime:
+    1. NODE_ENV: The current node environment. Example: `production`
+    2. API_CONFIG_PARAMETER_PATH: The SSM Parameter Store path for the API Configuration String. Example: `/production/myAppAPIConfig`
+      (Includes the `API Config Parameter Name`, `myAppAPIConfig` in this case.)
 Parameters:
   # Common/Hosting
   EnvironmentType:
@@ -36,6 +41,9 @@ Parameters:
         *.example.com
     AllowedPattern: "^.*?us-east-1.*"
     ConstraintDescription: "The certificate must be in the us-east-1 region."
+  APIConfigParameterName:
+    Type: "String"
+    Description: "The name of the SSM Parameter used to store the API config."
   # UI Repo
   GitHubUser:
     Type: "String"
@@ -111,6 +119,7 @@ Metadata:
           - FullDomainName
           - FullAPIDomainName
           - SSLCertificateARN
+          - APIConfigParameterName
       - Label:
           default: UI GitHub Settings
         Parameters:
@@ -150,6 +159,8 @@ Metadata:
         default: Full API Domain Name
       SSLCertificateARN:
         default: SSL Certificate ARN
+      APIConfigParameterName:
+        default: API Config Parameter Name
       GitHubToken:
         default: UI GitHub Access Token
       GitHubUser:
@@ -198,9 +209,20 @@ Resources:
             Principal:
               Service:
                 - lambda.amazonaws.com
+      # Custom
+      Policies:
+        - PolicyName: lambda-parameter-store
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter*'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentType}/${APIConfigParameterName}*'
+            Version: 2012-10-17
   APICloudFunction:
     Type: AWS::Lambda::Function
     Properties:
+      Timeout: 30
       Code:
         ZipFile: |
           module.exports = {handler: async () => ({
@@ -211,6 +233,7 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: !Ref EnvironmentType
+          API_CONFIG_PARAMETER_PATH: !Sub '/${EnvironmentType}/${APIConfigParameterName}'
       Handler: index.handler
       Role:
         Fn::GetAtt:
