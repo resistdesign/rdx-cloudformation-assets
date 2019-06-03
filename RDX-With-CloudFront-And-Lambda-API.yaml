@@ -233,6 +233,7 @@ Resources:
       Environment:
         Variables:
           NODE_ENV: !Ref EnvironmentType
+          CLIENT_ORIGIN: !Sub https://${FullDomainName}
           API_CONFIG_PARAMETER_PATH: !Sub '/${EnvironmentType}/${APIConfigParameterName}'
       Handler: index.handler
       Role:
@@ -694,7 +695,7 @@ Resources:
                 build:
                   commands:
                     - ${ConfigCommand}
-                    - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
+                    - "npm i && npm i rdx && API_BASE_URL='https://${FullAPIDomainName}' NODE_ENV=${EnvironmentType} npx rdx compile"
                 post_build:
                   commands:
                     - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
@@ -705,6 +706,8 @@ Resources:
                 files:
                     - '**/*'
             - DistributionId: !Ref CloudFront
+              FullDomainName: !Ref FullDomainName
+              FullAPIDomainName: !Ref FullAPIDomainName
       TimeoutInMinutes: 10
   Pipeline:
     Type: 'AWS::CodePipeline::Pipeline'
@@ -754,3 +757,4 @@ Outputs:
   APIURL:
     Description: API URL
     Value: !Sub https://${FullAPIDomainName}
+
