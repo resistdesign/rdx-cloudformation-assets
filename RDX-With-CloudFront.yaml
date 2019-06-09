@@ -150,14 +150,15 @@ Resources:
     DependsOn: CloudFront
     Properties:
       HostedZoneId: !Ref HostedZoneId
-      Type: CNAME
+      Type: A
       Name:
         Fn::Sub:
           - "${DomainName}."
           - DomainName: !Ref FullDomainName
-      TTL: 300
-      ResourceRecords:
-        - Fn::Sub:
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName:
+          Fn::Sub:
             - "${DomainName}."
             - DomainName: !GetAtt CloudFront.DomainName
   CodeBuildRole:
@@ -238,20 +239,25 @@ Resources:
         Image: !Sub '${BuildImage}'
       Source:
         Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.1
-          phases:
-            build:
-              commands:
-                - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
-            post_build:
-              commands:
-                - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
-          artifacts:
-            type: zip
-            base-directory: 'public'
-            files:
-                - '**/*'
+        BuildSpec:
+          Fn::Sub:
+            - |
+              version: 0.1
+              phases:
+                build:
+                  commands:
+                    - "npm i && npm i rdx && NODE_ENV=${EnvironmentType} npx rdx compile"
+                post_build:
+                  commands:
+                    - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
+                    - aws cloudfront create-invalidation --distribution-id "${DistributionId}" --paths "/*"
+              artifacts:
+                type: zip
+                base-directory: 'public'
+                files:
+                    - '**/*'
+            - FullDomainName: !Ref FullDomainName
+              DistributionId: !Ref CloudFront
       TimeoutInMinutes: 10
   Pipeline:
     Type: 'AWS::CodePipeline::Pipeline'
