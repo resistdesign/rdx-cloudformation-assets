@@ -1,0 +1,90 @@
+[
+  {
+    "ParameterKey": "EnvironmentType",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "FullDomainName",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "FullAPIDomainName",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "SSLCertificateARN",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIConfigParameterName",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "GitHubUser",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "GitHubRepo",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "GitHubBranch",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "GitHubToken",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "BuildType",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "BuildComputeType",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "BuildImage",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "ConfigCommand",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIGitHubUser",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIGitHubRepo",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIGitHubBranch",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIGitHubToken",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIBuildType",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIBuildComputeType",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIBuildImage",
+    "UsePreviousValue": true
+  },
+  {
+    "ParameterKey": "APIConfigCommand",
+    "UsePreviousValue": true
+  }
+]

@@ -1,0 +1,956 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Automatically build and deploy a single page application from a GitHub repository. Assets
+  are hosted in S3 with a CloudFront CDN that provides SSL, a fallback (index.html) and
+  automatic redirection from HTTP to HTTPS. A DNS alias that points at the CloudFront
+  Distribution will be created in Route53.
+  Example App URL: `example.com -> https://example.com`
+  Sub-domain Example App URL: `app.example.com -> https://app.example.com`
+  *****
+  An Edge Optimized API Cloud Function will also be deployed with an API Gateway, DNS and SSL.
+  Example API URL: `api.example.com -> https://api.example.com`
+  Sub-domain Example API URL: `app-api.example.com -> https://app-api.example.com`
+  *****
+  Environment Variables available to the API Function at runtime:
+    1. NODE_ENV: The current node environment. Example: `production`
+    2. API_CONFIG_PARAMETER_PATH: The SSM Parameter Store path for the API Configuration String. Example: `/production/myAppAPIConfig`
+      (Includes the `API Config Parameter Name`, `myAppAPIConfig` in this case.)
+Parameters:
+  # Common/Hosting
+  EnvironmentType:
+    Type: "String"
+    Description: "The name of the environment to build under (NODE_ENV)"
+    Default: "production"
+  HostedZoneId:
+    Type: "AWS::Route53::HostedZone::Id"
+    Description: "Select the Hosted Zone"
+  FullDomainName:
+    Type: "String"
+    Description: |
+      The domain name of the selected Hosted Zone (Example: example.com) or
+      a sub-domain to be created within the Hosted Zone (Example: app.example.com)
+  FullAPIDomainName:
+    Type: "String"
+    Description: "A sub-domain to be created within the Hosted Zone (Example: app.example.com)"
+  SSLCertificateARN:
+    Type: "String"
+    Description: |
+      The ARN of the SSL Certificate (us-east-1 only).
+      The certificate should be for the Hosted Zone domain and a wildcard, for instance:
+        example.com
+        *.example.com
+    AllowedPattern: "^.*?us-east-1.*"
+    ConstraintDescription: "The certificate must be in the us-east-1 region."
+  APIConfigParameterName:
+    Type: "String"
+    Description: "The name of the SSM Parameter used to store the API config."
+  # UI Repo
+  GitHubUser:
+    Type: "String"
+    Description: "The GitHub User that owns the repository"
+  GitHubRepo:
+    Type: "String"
+    Description: "The name of the GitHub repository"
+  GitHubBranch:
+    Type: "String"
+    Description: "The name of the branch to be built"
+    Default: "master"
+  GitHubToken:
+    NoEcho: true
+    Type: "String"
+    Description: "A GitHub Access Token with `repo` permissions (https://github.com/settings/tokens)"
+  # UI Build Options
+  BuildType:
+    Type: "String"
+    Default: "LINUX_CONTAINER"
+    Description: "The type of container that will be used for running the build"
+  BuildComputeType:
+    Type: "String"
+    Default: "BUILD_GENERAL1_SMALL"
+    Description: "The type/size of build compute configuration"
+  BuildImage:
+    Type: "String"
+    Default: 'aws/codebuild/nodejs:10.14.1'
+    Description: "The image needed to build the app"
+  ConfigCommand:
+    Type: "String"
+    Default: 'echo "{}" > config.json'
+    Description: "A command to execute before the UI build command"
+  # API Repo
+  APIGitHubUser:
+    Type: "String"
+    Description: "The GitHub User that owns the repository"
+  APIGitHubRepo:
+    Type: "String"
+    Description: "The name of the GitHub repository"
+  APIGitHubBranch:
+    Type: "String"
+    Description: "The name of the branch to be built"
+    Default: "master"
+  APIGitHubToken:
+    NoEcho: true
+    Type: "String"
+    Description: "A GitHub Access Token with `repo` permissions (https://github.com/settings/tokens)"
+  # API Build Options
+  APIBuildType:
+    Type: "String"
+    Default: "LINUX_CONTAINER"
+    Description: "The type of container that will be used for running the build"
+  APIBuildComputeType:
+    Type: "String"
+    Default: "BUILD_GENERAL1_SMALL"
+    Description: "The type/size of build compute configuration"
+  APIBuildImage:
+    Type: "String"
+    Default: 'aws/codebuild/nodejs:10.14.1'
+    Description: "The image needed to build the app"
+  APIConfigCommand:
+    Type: "String"
+    Default: 'echo "{}" > config.json'
+    Description: "A command to execute before the API build command"
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Hosting Configuration
+        Parameters:
+          - EnvironmentType
+          - HostedZoneId
+          - FullDomainName
+          - FullAPIDomainName
+          - SSLCertificateARN
+          - APIConfigParameterName
+      - Label:
+          default: UI GitHub Settings
+        Parameters:
+          - GitHubToken
+          - GitHubUser
+          - GitHubRepo
+          - GitHubBranch
+      - Label:
+          default: UI Build Settings
+        Parameters:
+          - BuildType
+          - BuildComputeType
+          - BuildImage
+          - ConfigCommand
+      - Label:
+          default: API GitHub Settings
+        Parameters:
+          - APIGitHubToken
+          - APIGitHubUser
+          - APIGitHubRepo
+          - APIGitHubBranch
+      - Label:
+          default: API Build Settings
+        Parameters:
+          - APIBuildType
+          - APIBuildComputeType
+          - APIBuildImage
+          - APIConfigCommand
+    ParameterLabels:
+      EnvironmentType:
+        default: Environment Type
+      HostedZoneId:
+        default: Hosted Zone
+      FullDomainName:
+        default: Full Domain Name
+      FullAPIDomainName:
+        default: Full API Domain Name
+      SSLCertificateARN:
+        default: SSL Certificate ARN
+      APIConfigParameterName:
+        default: API Config Parameter Name
+      GitHubToken:
+        default: UI GitHub Access Token
+      GitHubUser:
+        default: UI GitHub User (or Organization)
+      GitHubRepo:
+        default: UI GitHub Repository Name
+      GitHubBranch:
+        default: UI Build Branch
+      BuildType:
+        default: UI CodeBuild Build Type
+      BuildComputeType:
+        default: UI CodeBuild Compute Instance Type
+      BuildImage:
+        default: UI CodeBuild Build Image
+      ConfigCommand:
+        default: UI Config Command
+      APIGitHubToken:
+        default: API GitHub Access Token
+      APIGitHubUser:
+        default: API GitHub User (or Organization)
+      APIGitHubRepo:
+        default: API GitHub Repository Name
+      APIGitHubBranch:
+        default: API Build Branch
+      APIBuildType:
+        default: API CodeBuild Build Type
+      APIBuildComputeType:
+        default: API CodeBuild Compute Instance Type
+      APIBuildImage:
+        default: API CodeBuild Build Image
+      APIConfigCommand:
+        default: API Config Command
+Resources:
+  # Custom Resources
+  LambdaForCloudFormation:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: LambdaForCloudFormation
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Principal:
+              Service: lambda.amazonaws.com
+      Policies:
+        - PolicyName: WriteCloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+        - PolicyName: UpdateUserPoolClient
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'cognito-idp:UpdateUserPoolClient'
+                Resource: 'arn:aws:cognito-idp:*:*:userpool/*'
+        - PolicyName: ManageUserPoolDomain
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'cognito-idp:CreateUserPoolDomain'
+                Resource: 'arn:aws:cognito-idp:*:*:userpool/*'
+              - Effect: Allow
+                Action: 'cognito-idp:DeleteUserPoolDomain'
+                Resource: 'arn:aws:cognito-idp:*:*:userpool/*'
+              - Effect: Allow
+                Action: 'cognito-idp:DescribeUserPoolDomain'
+                Resource: '*'
+        - PolicyName: InvokeLambdaFunction
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'lambda:InvokeFunction'
+                Resource: 'arn:aws:lambda:*:*:function:*'
+        - PolicyName: UpdateCloudFrontDistribution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'cloudfront:UpdateDistribution'
+                Resource: '*'
+        - PolicyName: UpdateDNSRecord
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'route53:ChangeResourceRecordSets'
+                  - 'route53:ListResourceRecordSets'
+                Resource: '*'
+  CloudFormationSendResponse:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: CloudFormationSendResponse
+      Runtime: nodejs10.x
+      Code: ./deploy/CloudFormationSendResponse.js
+      Handler: CloudFormationSendResponse.handler
+      Role: !GetAtt LambdaForCloudFormation.Arn
+  CloudFormationCognitoUserPoolClientSettings:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: CloudFormationCognitoUserPoolClientSettings
+      Runtime: nodejs10.x
+      Code: ./deploy/CloudFormationCognitoUserPoolClientSettings.js
+      Handler: CloudFormationCognitoUserPoolClientSettings.handler
+      Role: !GetAtt LambdaForCloudFormation.Arn
+    DependsOn: CloudFormationSendResponse
+  CloudFormationCognitoUserPoolDomain:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: CloudFormationCognitoUserPoolDomain
+      Runtime: nodejs10.x
+      Timeout: 900
+      Code: ./deploy/CloudFormationCognitoUserPoolDomain.js
+      Handler: CloudFormationCognitoUserPoolDomain.handler
+      Role: !GetAtt LambdaForCloudFormation.Arn
+    DependsOn: CloudFormationSendResponse
+  # User Products
+  UserPoolSNSRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "cognito-idp.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-UserPoolSNSPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "sns:publish"
+                Resource: "*"
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      UserPoolName: !Sub ${AWS::StackName}-UserPool
+      SmsConfiguration:
+        ExternalId: !Sub ${AWS::StackName}-user-pool-sns-external-id
+        SnsCallerArn: !GetAtt UserPoolSNSRole.Arn
+      Schema:
+        - Name: name
+          Required: true
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${AWS::StackName}-UserPoolClient
+      UserPoolId: !Ref UserPool
+  UserPoolClientSettings:
+    Type: 'Custom::CognitoUserPoolClientSettings'
+    Properties:
+      ServiceToken: !GetAtt CloudFormationCognitoUserPoolClientSettings.Arn
+      UserPoolId: !Ref UserPool
+      UserPoolClientId: !Ref UserPoolClient
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURL: !Sub 'https://${FullDomainName}/auth-callback'
+      LogoutURL: !Sub 'https://${FullDomainName}/logout'
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - phone
+        - email
+        - openid
+        - aws.cognito.signin.user.admin
+        - profile
+  UserPoolDomain:
+    Type: 'Custom::CognitoUserPoolDomain'
+    Properties:
+      ServiceToken: !GetAtt CloudFormationCognitoUserPoolDomain.Arn
+      UserPoolId: !Ref UserPool
+      Domain: !Sub 'auth-${FullDomainName}'
+      CertificateArn: !Ref SSLCertificateARN
+      RecordSetProperties:
+        HostedZoneId: !Ref HostedZoneId
+        Name: !Sub 'auth-${FullDomainName}.'
+  # API Products
+  APIS3:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+  APICloudFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: lambda-parameter-store
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter*'
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentType}/${APIConfigParameterName}*'
+            Version: 2012-10-17
+        - PolicyName: AccessUserDataBucket
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:*'
+                Resource:
+                  - Fn::Sub:
+                      - '${ARN}'
+                      - ARN: !GetAtt APIS3.Arn
+                  - Fn::Sub:
+                      - '${ARN}/*'
+                      - ARN: !GetAtt APIS3.Arn
+  APICloudFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Timeout: 30
+      Code:
+        ZipFile: |
+          module.exports = {handler: async () => ({
+                      statusCode: 200,
+                      headers: {'Content-Type': 'application/json'},
+                      body: '"nice jorb!"'
+                    })};
+      Environment:
+        Variables:
+          NODE_ENV: !Ref EnvironmentType
+          CLIENT_ORIGIN: !Sub https://${FullDomainName}
+          API_CONFIG_PARAMETER_PATH: !Sub '/${EnvironmentType}/${APIConfigParameterName}'
+          USER_DATA_BUCKET: !Ref APIS3
+      Handler: index.handler
+      Role:
+        Fn::GetAtt:
+          - APICloudFunctionRole
+          - Arn
+      Runtime: nodejs8.10
+  APIGatewayRESTAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${AWS::StackName}-APIGatewayRESTAPI'
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  APIGatewayRESTAPIResource:
+    Type: AWS::ApiGateway::Resource
+    DependsOn: APIGatewayRESTAPI
+    Properties:
+      ParentId:
+        Fn::GetAtt:
+          - APIGatewayRESTAPI
+          - RootResourceId
+      PathPart: '{proxy+}'
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+  APIGatewayRESTAPIMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn: APIGatewayRESTAPIResource
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId:
+        Ref: APIGatewayRESTAPIResource
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${APICloudFunction.Arn}/invocations
+  APIGatewayRESTAPIRootMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn: APIGatewayRESTAPIResource
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId:
+        Fn::GetAtt:
+          - APIGatewayRESTAPI
+          - RootResourceId
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${APICloudFunction.Arn}/invocations
+  APIGatewayRESTAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - APIGatewayRESTAPIResource
+      - APIGatewayRESTAPIMethod
+      - APIGatewayRESTAPIRootMethod
+      - APIGatewayRESTAPI
+      - APICloudFunction
+    Properties:
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+  APICloudWatch:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-APIGatewayLogs
+  APICloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - >-
+          arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+  APICloudWatchAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !GetAtt
+        - APICloudWatchRole
+        - Arn
+  APIGatewayRESTAPIEnvironment:
+    Type: AWS::ApiGateway::Stage
+    DependsOn:
+      - APICloudWatchAccount
+      - APIGatewayRESTAPIDeployment
+    Properties:
+      AccessLogSetting:
+        DestinationArn:
+          Fn::GetAtt:
+            - APICloudWatch
+            - Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength","apiGatewayErrorMessage":"$context.error.message"}'
+      DeploymentId:
+        Ref: APIGatewayRESTAPIDeployment
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      StageName: !Ref EnvironmentType
+  APIDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      CertificateArn: !Ref SSLCertificateARN
+      DomainName:
+        Fn::Sub:
+          - "${DomainName}"
+          - DomainName: !Ref FullAPIDomainName
+      EndpointConfiguration:
+        Types:
+          - EDGE
+  APIDomainNameBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    DependsOn:
+      - APIGatewayRESTAPI
+      - APIGatewayRESTAPIEnvironment
+      - APIDomainName
+    Properties:
+      DomainName:
+        Fn::Sub:
+          - "${DomainName}"
+          - DomainName: !Ref FullAPIDomainName
+      RestApiId:
+        Ref: APIGatewayRESTAPI
+      Stage: !Ref EnvironmentType
+  APICloudFunctionANYResourcePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:invokeFunction
+      Principal: apigateway.amazonaws.com
+      FunctionName:
+        Ref: APICloudFunction
+      SourceArn:
+        Fn::Sub:
+          - arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/*/*
+          - __Stage__: !Ref EnvironmentType
+            __ApiId__:
+              Ref: APIGatewayRESTAPI
+  APIRoute53Record:
+    Type: "AWS::Route53::RecordSet"
+    DependsOn: APIDomainName
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Type: A
+      Name:
+        Fn::Sub:
+          - "${DomainName}."
+          - DomainName: !Ref FullAPIDomainName
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName:
+          Fn::Sub:
+            - "${DomainName}."
+            - DomainName: !GetAtt APIDomainName.DistributionDomainName
+  # API CI/CD
+  APICodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codebuild-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+            Version: 2012-10-17
+  APICodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'codebuild:*'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:PutObject'
+                Resource:
+                  - 'arn:aws:s3:::codepipeline*'
+                Effect: Allow
+              - Action:
+                  - 's3:*'
+                  - 'cloudformation:*'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+  APIPipelineBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+  APICodeBuildDeploySite:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn:
+      - APICodeBuildRole
+    Properties:
+      Name: !Sub '${AWS::StackName}-APICodeBuildDeploySite'
+      Description: Deploy API to Lambda
+      ServiceRole: !GetAtt APICodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref APIBuildType
+        ComputeType: !Ref APIBuildComputeType
+        Image: !Sub '${APIBuildImage}'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec:
+          Fn::Sub:
+            - |
+              version: 0.1
+              phases:
+                build:
+                  commands:
+                    - ${APIConfigCommand}
+                    - "npm i && npm i @resistdesign/jsx-compiler && NODE_ENV=${EnvironmentType} npx jsxc"
+                post_build:
+                  commands:
+                    - cd dist && zip -qr ../dist.zip * && cd ..
+                    - aws lambda update-function-code --function-name "${APIFunctionArn}" --zip-file "fileb://dist.zip"
+              artifacts:
+                type: zip
+                base-directory: 'dist'
+                files:
+                    - '**/*'
+            - EnvironmentType: !Ref EnvironmentType
+              APIFunctionArn: !GetAtt APICloudFunction.Arn
+      TimeoutInMinutes: 10
+  APIPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn: APICodeBuildDeploySite
+    Properties:
+      RoleArn: !GetAtt APICodePipelineRole.Arn
+      Stages:
+        - Name: "Acquire-Source"
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref APIGitHubUser
+                Repo: !Ref APIGitHubRepo
+                Branch: !Ref APIGitHubBranch
+                OAuthToken: !Ref APIGitHubToken
+              RunOrder: 1
+        - Name: "Build-And-Deploy"
+          Actions:
+            - Name: Artifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: DeployOutput
+              Configuration:
+                ProjectName: !Ref APICodeBuildDeploySite
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location: !Ref APIPipelineBucket
+  # UI Products
+  S3:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Ref FullDomainName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+  CloudFront:
+    Type: "AWS::CloudFront::Distribution"
+    DependsOn: S3
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref FullDomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref SSLCertificateARN
+          SslSupportMethod: "sni-only"
+          MinimumProtocolVersion: "TLSv1.1_2016"
+        DefaultCacheBehavior:
+          ForwardedValues:
+            QueryString: false
+          TargetOriginId:
+            Fn::Sub:
+              - "S3-${S3BucketName}"
+              - S3BucketName: !Ref FullDomainName
+          ViewerProtocolPolicy: "redirect-to-https"
+        DefaultRootObject: "index.html"
+        Enabled: true
+        IPV6Enabled: false
+        HttpVersion: "http2"
+        Origins:
+          - DomainName:
+              Fn::Sub:
+                - "${S3BucketName}.s3.amazonaws.com"
+                - S3BucketName: !Ref FullDomainName
+            Id:
+              Fn::Sub:
+                - "S3-${S3BucketName}"
+                - S3BucketName: !Ref FullDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: "/index.html"
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: "/index.html"
+        PriceClass: "PriceClass_All"
+  Route53Record:
+    Type: "AWS::Route53::RecordSet"
+    DependsOn: CloudFront
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Type: A
+      Name:
+        Fn::Sub:
+          - "${DomainName}."
+          - DomainName: !Ref FullDomainName
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName:
+          Fn::Sub:
+            - "${DomainName}."
+            - DomainName: !GetAtt CloudFront.DomainName
+  # UI CI/CD
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codebuild-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+            Version: 2012-10-17
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'codebuild:*'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:PutObject'
+                Resource:
+                  - 'arn:aws:s3:::codepipeline*'
+                Effect: Allow
+              - Action:
+                  - 's3:*'
+                  - 'cloudformation:*'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+  PipelineBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+  CodeBuildDeploySite:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn:
+      - CodeBuildRole
+      - S3
+      - CloudFront
+    Properties:
+      Name: !Sub '${AWS::StackName}-BuildAndDeploySite'
+      Description: Deploy site to S3
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: !Ref BuildType
+        ComputeType: !Ref BuildComputeType
+        Image: !Sub '${BuildImage}'
+        EnvironmentVariables:
+          - Name: USER_POOL_CLIENT_ID
+            Type: PLAINTEXT
+            Value: !Ref UserPoolClient
+          - Name: AUTH_LOGIN_URL
+            Type: PLAINTEXT
+            Value: !Sub 'https://auth-${FullDomainName}/login?response_type=token&client_id=${UserPoolClient}&scope=aws.cognito.signin.user.admin+openid&redirect_uri=https://${FullDomainName}/auth-callback'
+          - Name: AUTH_SIGNUP_URL
+            Type: PLAINTEXT
+            Value: !Sub 'https://auth-${FullDomainName}/signup?response_type=token&client_id=${UserPoolClient}&scope=aws.cognito.signin.user.admin+openid&redirect_uri=https://${FullDomainName}/auth-callback'
+          - Name: AUTH_REDIRECT_PATH
+            Type: PLAINTEXT
+            Value: '/auth-callback'
+          - Name: AUTH_LOGOUT_PATH
+            Type: PLAINTEXT
+            Value: '/logout'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec:
+          Fn::Sub:
+            - |
+              version: 0.1
+              phases:
+                build:
+                  commands:
+                    - ${ConfigCommand}
+                    - "npm i && npm i rdx && API_BASE_URL='https://${FullAPIDomainName}' NODE_ENV=${EnvironmentType} npx rdx compile"
+                post_build:
+                  commands:
+                    - aws s3 cp --recursive --acl public-read ./public s3://${FullDomainName}/
+                    - aws cloudfront create-invalidation --distribution-id "${DistributionId}" --paths "/*"
+              artifacts:
+                type: zip
+                base-directory: 'public'
+                files:
+                    - '**/*'
+            - DistributionId: !Ref CloudFront
+              FullDomainName: !Ref FullDomainName
+              FullAPIDomainName: !Ref FullAPIDomainName
+      TimeoutInMinutes: 10
+  Pipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    DependsOn: CodeBuildDeploySite
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: "Acquire-Source"
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: '1'
+                Provider: GitHub
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              RunOrder: 1
+        - Name: "Build-And-Deploy"
+          Actions:
+            - Name: Artifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: DeployOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildDeploySite
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineBucket
+Outputs:
+  AppURL:
+    Description: App URL
+    Value: !Sub https://${FullDomainName}
+  APIURL:
+    Description: API URL
+    Value: !Sub https://${FullAPIDomainName}
+
