@@ -1,0 +1,21 @@
+{
+  "name": "rdx-cloudformation-assets",
+  "version": "0.0.0",
+  "description": "Various AWS CloudFormation assets used by RDX.",
+  "main": "index.js",
+  "scripts": {
+    "stack:package": "aws cloudformation package --template-file deploy.yaml --s3-bucket stack-data.example.com --output-template-file stack.yaml",
+    "stack:deploy": "aws cloudformation update-stack --stack-name Central --template-body file://stack.yaml --parameters file://deploy/parameters.json --capabilities CAPABILITY_NAMED_IAM",
+    "stack": "npm run stack:package && npm run stack:deploy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/resistdesign/rdx-cloudformation-assets.git"
+  },
+  "author": "Resist Design",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/resistdesign/rdx-cloudformation-assets/issues"
+  },
+  "homepage": "https://github.com/resistdesign/rdx-cloudformation-assets#readme"
+}
